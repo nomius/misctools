@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+
+INFO=info
+DEFAULT_DISK=disk.img
+SDISK_DEFAULT=1024
+
+set -x 
+
+err()
+{
+	if [ $? -ne 0 ]; then
+		dialog --title "David's virtualization manager" --msgbox "There's was an error executing:\n   ${2}\nAborting..." 8 60
+		return 0
+	fi
+	return 1
+}
+
+SetFileDirectory()
+{
+	[ -z "${DIR}" ] && DIR=$(dialog --stdout --title "David's Virtualization" --inputbox "Select working datastore directory" 8 60 "${HOME}/virtualization")
+	[ ! -d "${DIR}" ] && { mkdir -p "${DIR}"; err $? "mkdir -p ${DIR}"; }
+}
+
+CheckDIRSet()
+{
+	if [ -z "${DIR}" ]; then
+		dialog --title "David's Virtualization" --msgbox "Working directory not set. Aborting..." 5 60
+		return 1
+	fi
+	return 0
+}
+
+GetDISP()
+{
+	pp=$(ps ax | grep -v grep | grep "kvm .* -name " | sed -e 's/.* -vnc 0.0.0.0://g' -e 's/ .*//g')
+	for ((i=0; i< 1024; i++)); do
+		if [ "$(ps ax | grep -v grep | grep "kvm .* vnc 0.0.0.0:${i}")" = "" ]; then
+			echo ${i}
+			return
+		fi
+	done
+}
+
+WorkVMTemplate()
+{
+	if [ "$TYPE" = "template" ]; then
+		OPT=$(dialog --stdout --cancel-label "Back" --title "David's virtualization manager" --menu "Working template ${NAME}" 12 61 4 \
+			1 "Create a new virtual machine from template" \
+			2 "Convert to virtual machine" \
+			3 "Compress to ship or backup" \
+			4 "Remove from datastore ${DIR}")
+
+		if [ $? -ne 0 ]; then
+			return
+		fi
+
+		case ${OPT} in
+			1)
+				NNAME=$(dialog --stdout --title "David's virtualization manager" --inputbox "Input the name of the new virtual machine" 10 60)
+				[ $? -ne 0 ] && return
+				[ -z "${NNAME}" ] && { dialog --title "David's virtualization manager" --msgbox "Operation canceled because no virtual machine name was given" 5 60; return; }
+				[ -e "${DIR}/${NNAME}" ] && { dialog --title "David's virtualization manager" --msgbox "Operation aborted because there's already a template or virtual machine with name ${NNAME}" 5 60; return; }
+				cp -prf ${DIR}/${NAME} ${DIR}/${NNAME}
+				err $? "cp -prf ${DIR}/${NAME} ${DIR}/${NNAME}" && return
+				sed -i -e 's/TYPE=.*/TYPE=vm/g' ${DIR}/${NNAME}/${INFO}
+			;;
+			2)
+				sed -i -e 's/TYPE=.*/TYPE=vm/g' ${DIR}/${NAME}/${INFO}
+				dialog --title "David's virtualization manager" --msgbox "Template ${NAME} is now a virtual machine" 5 60
+			;;
+			3)
+				tar cpf ${DIR}/${NAME}.tar ${DIR}/${NAME}
+				err $? "tar cpf ${DIR}/${NAME}.tar ${DIR}/${NAME}" && return
+				xz ${DIR}/${NAME}.tar
+				err $? "xz ${DIR}/${NAME}.tar" && return
+				dialog --title "David's virtualization manager" --msgbox "${NAME} is now ready to ship in ${DIR}/${NAME}.tar.xz" 5 60
+			;;
+			4)
+				rm -rf ${DIR}/${NAME}
+				err $? "rm -rf ${DIR}/${NAME}" && return
+				dialog --title "David's virtualization manager" --msgbox "${NAME} was removed successfully" 5 60
+			;;
+		esac
+
+	elif [ "${TYPE}" = "vm" ]; then
+		while true; do
+			[ "$(ps ax | grep -v grep | grep "kvm .* -name ${NAME} ")" != "" ] && STATUS=ON || STATUS=OFF
+			OPT=$(dialog --stdout --cancel-label "Back" --title "David's virtualization manager" --menu "Working on virtual machine ${NAME}" 12 61 4 \
+				1 "$([ ${STATUS} = "ON" ] && echo Power Off || echo Power On)" \
+				2 "Open Console" \
+				3 "Convert to Template" \
+				4 "Create template from VM")
+
+			if [ $? -ne 0 ]; then
+				return
+			fi
+
+			case ${OPT} in
+				1)
+					if [ ${STATUS} = "OFF" ]; then
+						DISP=$(GetDISP)
+						if [ ${DISP} = "" ]; then
+							dialog --title "David's virtualization manager" --msgbox "Max number of virtual machines running reached"
+							break
+						fi
+						if [ ${STATUS} = "empty" ]; then
+							OO=""
+							if dialog --title "David's virtualization manager" --yesno "This is the first time that you start this machine. Do you want to load it with an ISO image and boot from there?" 7 60; then
+								ISO=$(dialog --stdout --title "David's virtualization manager" --inputbox "ISO image to boot from" 10 60)
+								[ $? -ne 0 ] && break
+								[ -z "${ISO}" -o ! -f "${ISO}" ] && { dialog --title "David's virtualization manager" --msgbox "Operation canceled because no ISO image was given" 5 60; break; }
+								OO="-boot d -cdrom ${ISO}"
+							fi
+							sed -i -e 's/STATUS=empty/TYPE=nofst/g' ${DIR}/${NNAME}/${INFO}
+						fi
+						kvm --enable-kvm ${OO} ${DIR}/${NAME}/${DISK} -net nic -net bridge,br=br0 -vnc 0.0.0.0:${DISP} -name ${NAME} -usbdevice tablet &
+					else
+						KPID=$(ps ax | grep -v grep | grep "kvm .* -name ${NAME} " | awk '{print $1}')
+						kill ${KPID}
+						err $? "kill ${KPID}" && break
+					fi
+				;;
+				2)
+					if [ ${STATUS} = "OFF" ]; then
+						dialog --title "David's virtualization manager" --msgbox "You must power-on the virtual machine first" 5 60
+					else
+						DISP=$(ps ax | grep -v grep | grep "kvm .* -name ${NAME} " | sed -e 's/.* -vnc 0.0.0.0://g' -e 's/ .*//g')
+						if [ -n "${DISP}" ]; then
+							vncviewer :${DISP} &
+						else
+							dialog --title "David's virtualization manager" --msgbox "Oooops: No VNC in VM ${NAME}. Something smells bad here..." 5 60
+						fi
+					fi
+				;;
+				3)
+					if [ ${STATUS} = "OFF" ]; then
+						sed -i -e 's/TYPE=.*/TYPE=template/g' ${DIR}/${NAME}/${INFO}
+						dialog --title "David's virtualization manager" --msgbox "${NAME} is now a template" 5 60
+					else
+						dialog --title "David's virtualization manager" --msgbox "You must turn the VM OFF first" 5 60
+					fi
+				;;
+				4)
+					TNAME=$(dialog --stdout --title "David's virtualization manager" --inputbox "Input the name of the new template" 10 60)
+					[ $? -ne 0 ] && break
+					[ -z "${TNAME}" ] && { dialog --title "David's virtualization manager" --msgbox "Operation canceled because no template name was given" 5 60; break; }
+					[ -e "${DIR}/${TNAME}" ] && { dialog --title "David's virtualization manager" --msgbox "Operation aborted because there's already a template or virtual machine with name ${TNAME}" 5 60; break; }
+					cp -prf ${DIR}/${NAME} ${DIR}/${TNAME}
+					err $? "cp -prf ${DIR}/${NAME} ${DIR}/${TNAME}" && break
+					sed -i -e 's/TYPE=.*/TYPE=template/g' ${DIR}/${TNAME}/${INFO}
+					dialog --title "David's virtualization manager" --msgbox "Created new template from vm ${NAME} as ${TNAME}" 5 60
+				;;
+			esac
+			return
+		done
+	fi
+}
+
+ListVMs()
+{
+	while true; do
+		i=0
+		j=0
+		set -x
+		for x in ${DIR}/*; do
+			if [ -d "${x}" -a -f "${x}/${INFO}" ]; then
+				j=$((${j} + 1))
+				a[${i}]=${j}
+				i=$((${i} + 1))
+				. "${x}/${INFO}"
+
+				if [ ${NAME} != $(basename ${x}) ]; then
+					continue
+				fi
+				if [ ${TYPE} = "template" ]; then
+					a[${i}]="${NAME} [TEMPLATE]"
+				elif [ "$(ps ax | grep -v grep | grep "kvm .* -name ${NAME} ")" != "" ]; then
+					a[${i}]="${NAME} [RUNNING]"
+				else
+					a[${i}]="${NAME} [STOPPED]"
+				fi
+				i=$((${i} + 1))
+			fi
+		done
+
+		OPT=$(dialog --stdout --ok-label "Work" --cancel-label "Back" --title "Virtual Machines" --menu "Current virtual machines in datastore" 17 61 1 "${a[@]}")
+
+		if [ $? -eq 0 ]; then
+			WorkVMTemplate ${OPT}
+		elif [ $? -eq 3 ]; then
+			DISP=$(ps ax | grep -v grep | grep "kvm .* -name ${NAME} " | sed -e 's/.* -vnc 0.0.0.0://g' -e 's/ .*//g')
+			if [ -n "${DISP}" ]; then
+				vncviewer :${DISP} &
+			else
+				dialog --title "David's virtualization manager" --msgbox "Oooops: No VNC in VM ${NAME}. Something smells bad here..." 5 60
+			fi
+		else
+			return
+		fi
+	done
+}
+
+CreateNewVM()
+{
+	NAME=$(dialog --stdout --title "David's virtualization manager" --inputbox "Input the name of the new virtual machine" 10 60)
+	[ -z "${NAME}" ] && { dialog --title "David's virtualization manager" --msgbox "Operation canceled because no virtual machine name was given" 5 60; return; }
+	[ -e "${DIR}/${NAME}" ] && { dialog --title "David's virtualization manager" --msgbox "Operation aborted because there's already a template or virtual machine with name ${NAME}" 5 60; return; }
+	mkdir ${DIR}/${NAME}
+	SDISK=$(dialog --stdout --title "David's virtualization manager" --inputbox "Input the max-size of the virtual machine disk (in MB)" 10 60)
+	test "$SDISK" -eq "$SDISK" > /dev/null 2>&1
+	[ $? -ne 0 ] && { dialog --title "David's virtualizacion" --msgbox "Not a valid disk size. Setting to ${SDISK_DEFAULT}MB" 5 60; SDISK=${SDISK_DEFAULT}; }
+	qemu-img create -f qcow2 -o preallocation=metadata ${DIR}/${NAME}/disk.img ${SDISK}M
+	if err $? "qemu-img create -f qcow2 -o preallocation=metadata ${DIR}/${NAME}/disk.img ${SDISK}M"; then
+		rm -rf ${DIR}/${NAME}
+		return
+	fi
+	cat << EOF > ${DIR}/${NAME}/${INFO}
+NAME=${NAME}
+TYPE=vm
+DISK=disk.img
+STATUS=empty
+EOF
+	dialog --title "David's virtualization manager" --msgbox "New virtual machine ${NAME} created with a disk size of ${SDISK}" 5 60
+}
+
+while true; do
+	OPT=$(dialog --stdout --cancel-label "Exit" --title "David's virtualization manager" --menu "Virtualization management main console" 10 61 3 \
+		1 "Select working datastore directory (${DIR})" \
+		2 "Check existing Virtual Machines & Templates" \
+		3 "Create a new Virtual machine")
+
+	if [ $? -ne 0 ]; then
+		exit
+	fi
+
+	case ${OPT} in
+		1)
+			SetFileDirectory
+		;;
+		2)
+			CheckDIRSet && ListVMs
+		;;
+		3)
+			CheckDIRSet && CreateNewVM
+		;;
+	esac
+done
+
