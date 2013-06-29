@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+
+create()
+{
+	PROGS="/bin/ls /bin/sh"
+	if [ $# -lt 1 ]; then
+		error ${0} 1
+	fi
+	echo "Creating directory structure"
+	if [ ! -d ${1} ]; then
+	   mkdir -p ${1}
+	fi
+	chown root ${1}
+	for x in bin etc lib; do
+		if [ ! -d ${1}/${x} ] ; then
+			mkdir -p ${1}/${x}
+		fi
+		chown root ${1}/${x}
+	done
+	echo "Installing programs and libraries..."
+	for x in $PROGS; do
+		if [ ! -f $1/${x} ]; then
+			cp ${x} ${1}/bin
+		fi
+		chmod 111 ${1}/bin
+		chown root ${1}/bin
+		for y in `ldd ${x}|awk '{print $3}'`; do
+			if [ ! -e ${1}/${y} ]; then
+				cp -prf ${y} ${1}/lib
+			fi
+			chown root ${1}/${y}
+		done
+	done
+	echo "Creating /etc/passwd y /etc/group"
+	for file in passwd group; do
+		for user in root bin daemon; do
+			grep "^${user}:x" /etc/${file} >> ${1}/etc/${file}
+		done
+	done
+	chmod 444 ${1}/etc/{passwd,group}
+	chown root ${1}/etc/{passwd,group}
+	echo "Creating pub/ e incoming/..."
+	if [ ! -d ${1}/pub ]; then
+		mkdir -p ${1}/pub
+	fi
+	chmod 2555 ${1}/pub
+	chown root ${1}/pub
+	if [ ! -d ${1}/incoming ]; then
+		mkdir -p ${1}/incoming
+	fi
+	chmod 1733 ${1}/incoming
+	chown root ${1}/incoming
+}
+
+add()
+{
+	if [ ! -e "${1}/bin/{sh,ls},etc/{group,passwd}" ]; then
+		echo "${1} no a valid chroot environment"
+		exit 1
+	fi
+	if [ ! -f ${2} ]; then
+		echo "${2} doesn't exists"
+	fi
+	echo "Installing needed libraries for ${1}"
+	for j in `ldd ${2}|awk '{print $3}'`; do
+		if [ ! -f ${1}/${j} ]; then
+			cp -prf ${j} ${1}/${j}
+		fi
+		chown root ${1}/${j}
+	done
+	echo "Installing ${1}"
+	cp ${2} ${1}/bin
+}
+
+error()
+{
+	echo "Usage:"
+	echo -e "  ${1} -c|--create   [CHROOT DIRECTORY]"
+	echo -e "  ${1} -a|--add      [CHROOT DIRECTORY] [FULL PATH PROGRAM]"
+	exit ${2}
+}
+
+case ${1} in
+	-c|--create)
+		create ${2}
+	;;
+	-a|--add)
+		add ${2} ${3}
+	;;
+	*)
+		error ${0} 1
+	;;
+esac
+
+# EOF
