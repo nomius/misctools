@@ -1,0 +1,329 @@
+#!/usr/bin/env bash
+
+# Certificates created will be valid for 10 years by default
+DAYS_DEFAULT=$((365*10))
+
+err()
+{
+	if [ $? -ne 0 ]; then
+		dialog --title "Certificates work" --msgbox "There's was an error executing:\n   ${2}\nAborting..." 8 60
+		return 0
+	fi
+	return 1
+}
+
+HelpEncryptKeys()
+{
+	dialog --title "Certificates work" --msgbox 'In order to use a certificate created for Apache (mod_ssl: SSLCertificateKeyFile) the Key should be accesible by Apache and unencrypted.
+You can still use this key-pair, even encrypted (which is the best case for shared users or not private systems) with ssh, but you should setup ssh-agent.
+You should add this to your profile:
+
+SSHAGENT=/usr/bin/ssh-agent
+SSHAGENTARGS="-s"
+if [ -z "$SSH_AUTH_SOCK" -a -x "$SSHAGENT" ]; then
+   eval `$SSHAGENT $SSHAGENTARGS`
+   trap "kill $SSH_AGENT_PID" 0
+fi' 18 60
+}
+
+CheckDIRSet()
+{
+	if [ -z "${DIR}" ]; then
+		 dialog --title "Certificates work" --msgbox "Working directory not set. Aborting..." 5 60
+		 return 1
+	 fi
+	 return 0
+}
+
+Check()
+{
+	if [ ! -f ${1} ]; then
+		dialog --title "Certificates work" --msgbox "${2}" 5 60
+		return 0
+	fi
+	return 1
+}
+
+SetDays()
+{
+	[ -z "$DAYS" ] && DAYS=$(dialog --stdout --title "Certificates work" --inputbox "Valid days for the certificate?" 10 60 "${DAYS_DEFAULT}")
+	test "$DAYS" -eq "$DAYS" > /dev/null 2>&1 
+	[ $? -ne 0 ] && {dialog --title "Certificates work" --msgbox "Not a valid day number. Setting to ${DAYS_DEFAULT}" 5 60; DAYS=${DAYS_DEFAULT}; }
+}
+
+SetFileDirectory()
+{
+	[ -z "${DIR}" ] && DIR=$(dialog --stdout --title "Certificates work" --inputbox "Directory to work your keys and certificates" 8 60 "${HOME}/.ssh")
+	PRIV=${DIR}/id_rsa
+	PUB=${DIR}/id_rsa.pub
+	CRT=${DIR}/id_rsa.crt
+	CSR=${DIR}/id_rsa.csr
+	CRT_DER=${DIR}/id_rsa_der.crt
+	CRT_DHP=${DIR}/id_rsa.dhp
+	PEM_SRV=${DIR}/id_rsa.PEM
+	mkdir -p $(dirname "${PRIV}")
+	err $? "mkdir -p $(dirname ${PRIV})" && return
+}
+
+SetOUs()
+{
+	while true; do
+		tmp=$(mktemp)
+		dialog --stdout --title "Certificates work" --form "Certificate information (Common name can't be empty)" 21 60 13 \
+			"Common name:"        1 0 "" 1 14 40 39 \
+			"Organization Name:"  3 0 "" 3 20 34 33 \
+			"Organization Unit:"  5 0 "" 5 20 34 33 \
+			"Country Name:"       7 0 "" 7 15 3 2 \
+			"State/Province:"     9 0 "" 9 17 38 37 \
+			"Locality Name:"     11 0 "" 11 16 39 38 \
+			"Email address:"     13 0 "" 13 16 39 38 > ${tmp}
+		if [ $? -ne 0 ]; then
+			rm -f ${tmp}
+			return 1
+		fi
+		#grep -n '^.*$' ${tmp} | while read line; do ss[$(($(echo ${line} | awk -F ':' '{print $1}') - 1))]=${line:2}; done
+		i=0; while read line; do ss[${i}]=${line}; i=$(($i + 1)); done < ${tmp}
+		rm -f ${tmp}
+		s=""
+		if [ -n "${ss[0]}" ]; then
+			[ -n "${ss[3]}" ] && s="${s}/C=${ss[3]}"
+			[ -n "${ss[4]}" ] && s="${s}/ST=${ss[4]}"
+			[ -n "${ss[5]}" ] && s="${s}/L=${ss[5]}"
+			[ -n "${ss[1]}" ] && s="${s}/O=${ss[1]}"
+			[ -n "${ss[2]}" ] && s="${s}/OU=${ss[2]}"
+			[ -n "${ss[0]}" ] && s="${s}/CN=${ss[0]}"
+			[ -n "${ss[6]}" ] && s="${s}/emailAddress=${ss[6]}"
+			echo ${s}
+			return 0
+		fi
+	done
+}
+
+CreateKeys()
+{
+	if [ -f ${PRIV} ]; then
+		if dialog --title "Certificates work" --yesno "There's already a private key in the same directory, do you want to remove it and create a new one?" 7 60; then
+			rm -f ${PRIV}
+		else
+			ssh-keygen -f ${PRIV} -y > ${PUB}
+			err $? "ssh-keygen -f ${PRIV} -y > ${PUB}"
+			return
+		fi
+	fi
+	dialog --title "Certificates work" --infobox "Creating RSA private key in PEM format: $(basename ${PRIV})" 3 60
+	openssl genrsa -out ${PRIV} 4096
+	err $? "openssl genrsa -out ${PRIV} 4096" && return
+	chmod 0600 ${PRIV} && chmod 0700 $(dirname ${PRIV})
+	dialog --title "Certificates work" --infobox "Creating RSA public key from private key: $(basename ${PUB})" 3 60
+	ssh-keygen -f ${PRIV} -y > ${PUB}
+	err $? "ssh-keygen -f ${PRIV} -y > ${PUB}" && return
+	dialog --title "Certificates work" --msgbox "Key pair created ($(basename ${PRIV}),$(basename ${PUB}))" 5 60
+}
+
+CreateSelfSignedCert()
+{
+	if [ -f ${CRT} ]; then
+		if dialog --title "Certificates work" --yesno "There's already a certificate in the same directory, do you want to remove it and create a new one?" 7 60; then
+			rm -f ${CRT} ${CRT_DER}
+		else
+			return
+		fi
+	fi
+
+	Check ${PRIV} "There's no key pair, use the option 1 from the menu to create a new pair" && return
+
+	SetDays
+	OuInfo=$(SetOUs)
+	[ $? -ne 0 ] && return
+	openssl req -x509 -nodes -days ${DAYS} -new -key ${PRIV} -out ${CRT} -subj "${OuInfo}"
+	err $? "openssl req -x509 -days ${DAYS} -new -key ${PRIV} -out ${CRT}" && return
+	openssl x509 -in ${CRT} -outform der -out ${CRT_DER}
+	err $? "openssl x509 -in ${CRT} -outform der -out ${CRT_DER}" && return
+	dialog --title "Certificates work" --msgbox "Self Signed certificate created in ${CRT}\nCertificate exported in DER format (for web browsers) in $(basename ${CRT_DER})" 6 78
+}
+
+CreateCertSigningReq()
+{
+	if [ -f ${CSR} ]; then
+		if dialog --title "Certificates work" --yesno "There's already a certificate signing request in the same directory, do you want to remove it and create a new one?" 7 60; then
+			rm -f ${CSR}
+		else
+			return
+		fi
+	fi
+
+	Check ${PRIV} "There's no key pair, use the option 1 from the menu to create a new pair" && return
+
+	OuInfo=$(SetOUs)
+	[ $? -ne 0 ] && return
+	openssl req -new -key ${PRIV} -out ${CSR} -subj "${OuInfo}"
+	err $? "openssl req -new -key ${PRIV} -out ${CSR}" && return
+	dialog --title "Certificates work" --msgbox "Certificate signing request created in $(basename ${CSR})" 5 78
+}
+
+SignCertReq()
+{
+
+	if [ -f ${CRT} ]; then
+		if dialog --title "Certificates work" --yesno "There's already a signed certificate in the working directory, do you want to remove it and re-sign a request?" 7 60; then
+			rm -f ${CRT} ${CRT_DER}
+		else
+			return
+		fi
+	fi
+
+	Check ${PRIV} "There's no key pair, use the option 1 from the menu to create a new pair" && return
+	Check ${CSR} "There's no certificate signing request in the same directory, use the option 4 from the menu to create a CSR" && return
+
+	SetDays
+	openssl x509 -req -days ${DAYS} -in ${CSR} -signkey ${PRIV} -out ${CRT}
+	err $? "openssl x509 -req -days ${DAYS} -in ${CSR} -signkey ${PRIV} -out ${CRT}" && return
+	dialog --title "Certificates work" --msgbox "Your signing request ${CSR} was signed in ${CRT}" 5 60
+	openssl x509 -in ${CRT} -outform der -out ${CRT_DER}
+	err $? "openssl x509 -in ${CRT} -outform der -out ${CRT_DER}" && return
+	dialog --title "Certificates work" --msgbox "Certificate exported in DER format (for web browsers) in $(basename ${CRT_DER})" 5 78
+}
+
+CreateDHParam()
+{
+	rm -f ${CRT_DHP}
+	dialog --title "Certificates work" --infobox "Creating Diffie-Hoffman Parameters: $(basename ${CRT_DHP}).\nThis might take a few minutes..." 4 60
+	openssl dhparam -out ${CRT_DHP} 1536 >/dev/null 2>&1
+	err $? "openssl dhparam -out ${CRT_DHP} 1536" && return
+	dialog --title "Certificates work" --msgbox "Diffie-Hoffman Parameters created in $(basename ${CRT_DHP})" 5 60
+}
+
+CreatePEMFileForServers()
+{
+	Check ${PRIV} "There's no key pair, use the option 1 from the menu to create a new pair" && return
+	Check ${CRT} "There's no certificate in the current directory" && return
+	CreateDHParam
+	cat ${PRIV} ${CRT} ${CRT_DHP} > ${PEM_SRV}
+	dialog --title "Certificates work" --msgbox "PEM file for servers created in $(basename ${PEM_SRV})" 5 60
+}
+
+DisplayCertInfo()
+{
+	Check ${CRT} "There's no certificate in the current directory" && return
+
+	Issuer=$(openssl x509 -in ${CRT} -text | awk -F: '/^[ ]*Issuer:/ {print $2}' | sed -e 's/ *$//g' -e 's/^ *//g')
+
+	From=$(openssl x509 -in ${CRT} -noout -startdate | awk -F= '/notBefore/ { printf("%s\n",$NF); }' | sed -e 's/ *$//g' -e 's/^ *//g')
+	To=$(openssl x509 -in ${CRT} -noout -enddate | awk -F= '/notAfter/ { printf("%s\n",$NF); }' | sed -e 's/ *$//g' -e 's/^ *//g')
+
+	SubjectKeyIndentifier=$(openssl x509 -in ${CRT} -text | awk -F: '/^[ ]*X509v3 Subject Key Identifier:/ {getline; print $0}' | sed -e 's/ *$//g' -e 's/^ *//g')
+	AuthorityKeyIndentifier=$(openssl x509 -in ${CRT} -text | awk -F: '/^[ ]*X509v3 Authority Key Identifier:/ {getline; print $0}' | sed -e 's/^[ ]*keyid://g')
+
+
+	secs_to_expiry=$(echo "$(date --date="${To}" +%s) - $(date +%s)" | bc)
+	days_to_expiry=$(echo "${secs_to_expiry}/(60*60*24)" | bc)
+	
+	dialog $([ $days_to_expiry -lt 10 ] && echo "--extra-button --extra-label Renew") --title "Certificates work" --msgbox "Issuer:\n ${Issuer}\nValid from: ${From}\nValid To: ${To}\nSubject Key Identifier:\n ${SubjectKeyIndentifier}\nAuthority Key Identifier:\n ${AuthorityKeyIndentifier}" 16 76
+	if [ $? -eq 3 ]; then
+		if dialog --title "Certificates work" --yesno "Do you want to re-convert it to certificate signing request?" 6 65; then
+			Check ${PRIV} "There's no key pair, use the option 1 from the menu to create a new pair" && return
+			openssl x509 -x509toreq -in ${CRT} -out ${CSR} -signkey ${PRIV}
+			err $? "openssl x509 -x509toreq -in ${CRT} -out ${CSR} -signkey ${PRIV}" && return
+		fi
+	fi
+}
+
+ToggleEncryptKeys()
+{
+	dialog --title "Certificates work" --msgbox "Functionality not implemented yet" 5 60
+	return
+
+	Check ${PRIV} "There's no key pair, use the option 1 from the menu to create a new pair" && return
+
+	dialog --extra-button --extra-label "Help" --title "Certificates work" --yesno "WARNING: Encrypting your Keys will not allow you to use it in SSLCertificateKeyFile. Do you want to toggle encryption anyways?" 7 60
+	case $? in
+		0)
+			openssl rsa -in ${PRIV} -des3 -out ${PRIV}
+			err $? "openssl rsa -in ${PRIV} -des3 -out ${PRIV}" && return
+			dialog --title "Certificates work" --msgbox "Key encrypted in $(basename ${PRIV})" 5 60
+		;;
+		3)
+			HelpEncryptKeys
+		;;
+	esac
+}
+
+b()
+{
+	basename $1
+}
+
+GetFilesInfo()
+{
+	if [ -e ${CRT} ]; then
+		SubjectKeyIndentifier=$(openssl x509 -in ${CRT} -text | awk -F: '/^[ ]*X509v3 Subject Key Identifier:/ {getline; print $0}' | sed -e 's/ *$//g' -e 's/^ *//g')
+		AuthorityKeyIndentifier=$(openssl x509 -in ${CRT} -text | awk -F: '/^[ ]*X509v3 Authority Key Identifier:/ {getline; print $0}' | sed -e 's/^[ ]*keyid://g')
+		selfsign=0;	[ "${SubjectKeyIndentifier}" = "${AuthorityKeyIndentifier}" ] && selfsign=1
+	fi
+	dialog --title "Certificates work" --msgbox "Currently you have the following files in ${DIR}:
+		$([ -e ${PRIV} ] && echo "\n '-> Private key: $(b ${PRIV})\n")$([ -e ${PUB} ] && echo " '-> Public key: $(b ${PUB})\n")$([ -e ${CSR} ] && echo " '-> Certificate signing request: $(b ${CSR})\n")$([ -e ${CRT} ] && echo " '-> Certificate $([ $selfsign -eq 1 ] && echo "(Self signed)"): $(b ${PUB})\n")$([ -e ${CRT_DER} ] && echo " '-> Certificate exported in DER (web browsers): $(b ${CRT_DER})\n")$([ -e ${CRT_DHP} ] && echo " '-> Diffie-Hoffman Parameters: $(b ${CRT_DHP})\n")$([ -e ${PEM_SRV} ] && echo " '-> PEM file for servers: $(b ${PEM_SRV})")" 12 76
+}
+
+if [ -n "${1}" ]; then
+	SetFileDirectory
+	case $1 in
+		'enc')
+			[ ! -f ${CRT} ] && ${0}
+			[ -z "${2}" ] && { echo "No file given to encrypt"; exit; }
+			openssl smime -encrypt -aes256 -in ${2} -binary -outform DEM -out ${2}.enc ${CRT}
+		;;
+		'dec')
+			[ ! -f ${CRT} ] && $0
+			[ -z "${2}" ] && { echo "No file given to decrypt"; exit; }
+			openssl smime -decrypt -in ${2} -binary -inform DEM -inkey ${PRIV} -out $(basename ${2} .enc)
+		;;
+	esac
+	exit
+fi
+
+while true; do
+	OPT=$(dialog --stdout --cancel-label "Exit" --title "Certificates work" --menu "This menu will help you in all the work needed to maintain certificates and keys up to date" 17 61 9 \
+			1 "Select working directory (${DIR})" \
+			2 "Create keys" \
+			3 "Create a self signed certificate from keys (CRT)" \
+			4 "Create a Certificate Signing Request from keys (CSR)" \
+			5 "Sign a certificate request (CSR)" \
+			6 "Create PEM file for servers" \
+			7 "Toggle Key encryption" \
+			8 "Get Certificate information" \
+			9 "Get files informatation" )
+	if [ $? -ne 0 ]; then
+		exit
+	fi
+
+	case $OPT in
+		1)
+			SetFileDirectory
+			;;
+		2)
+			CheckDIRSet && CreateKeys
+			;;
+		3)
+			CheckDIRSet && CreateSelfSignedCert
+			;;
+		4)
+			CheckDIRSet && CreateCertSigningReq
+			;;
+		5)
+			CheckDIRSet && SignCertReq
+			;;
+		6)
+			CheckDIRSet && CreatePEMFileForServers
+			;;
+		7)
+			CheckDIRSet && ToggleEncryptKeys
+			;;
+		8)
+			CheckDIRSet && DisplayCertInfo
+			;;
+		9)
+			CheckDIRSet && GetFilesInfo
+	esac
+done
+
+#EOF
