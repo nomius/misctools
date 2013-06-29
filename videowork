@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+
+if [ "${1}" = "split" ]; then
+	from="${2}"
+	to="${3}"
+	output="${4}"
+	file="${5}"
+	if [ "${to}" = "end" ]; then
+		mencoder -ovc copy -oac copy -ss ${from} -o ${output} ${file}
+	else
+		mencoder -ovc copy -oac copy -ss ${from} -endpos ${to} -o ${output} ${file}
+	fi
+elif [ "${1}" = "join" ]; then
+	output=${2}
+	shift
+	shift
+	mencoder -oac copy -ovc copy -idx -o ${output} $@
+elif [ "${1}" = "convert" ]; then
+	shift
+	for x in $@; do
+		mencoder ${x} -oac lavc -ovc lavc -lavcopts vcodec=msmpeg4v2:acodec=mp3:abitrate=32 -o ${x/%.*}.avi
+	done
+else
+	cat << EOF
+converter OPTIONS [FILE(s)]
+OPTIONS:
+    split from to output file  (gives you the video section into from and to - in seconds -)
+    join output files          (Join several files into one single file)
+    convert files              (convert files to avi divx 4/5)
+EOF
+fi
