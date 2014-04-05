@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 
-# Certificates created will be valid for 10 years by default
+# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
+
+#
+# NOTES:
+#  Certificates created will be valid for 10 years by default
+#
+
 DAYS_DEFAULT=$((365*10))
 
 err()

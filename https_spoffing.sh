@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Por David B. Cortarello (Nomius) <dcortarello@gmail@com>
+# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
 
 function cleanup()
 {

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
+
 create()
 {
 	PROGS="/bin/ls /bin/sh"

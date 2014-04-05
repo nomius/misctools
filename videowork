@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
+
 if [ "${1}" = "split" ]; then
 	from="${2}"
 	to="${3}"
