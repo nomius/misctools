@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+
+SVC_DIR=/etc/rc.d
+CONF=/etc/rc.conf
+
+. ${CONF}
+
+if [ -t 1 ]; then
+	RED='\e[0;32m'
+	GREEN='\e[0;31m'
+	YELLOW='\e[0;33m'
+	BACK='\e[0m'
+fi
+
+helpo()
+{
+	if [ -t 1 ]; then
+		echo "Usage: ${1} [service|help] [start|stop|enable|disable|status]"
+	fi
+
+	[ -t 1 ] && echo -e "\nServices:"
+	for x in $SVC_DIR/*; do
+		if [ -f "${x}" ]; then
+			chmod 0755 ${x} # Fix permissions if needed
+			enabled=0
+			for y in ${SERVICES[@]}; do
+				[ ${y} = "$(basename ${x})" ] && { echo -e "$([ -t 1 ] && echo " * ")$(basename ${x}) is ${RED}enabled${BACK}"; enabled=1; }
+			done
+			[ ${enabled} -eq 0 ] && echo -e "$([ -t 1 ] && echo " * ")$(basename ${x}) is ${GREEN}disabled${BACK}"
+		fi
+	done
+}
+
+srv="${1}"
+[ -z "${srv}" ] && { helpo; exit; }
+case ${2} in
+	start)
+		if [ -f "${SVC_DIR}/${srv}" ]; then
+			chmod 0755 ${SVC_DIR}/${srv} # Fix permissions if needed
+			${SVC_DIR}/${srv} start
+			[ $? -eq 0 ] && echo "$1 started"
+		fi
+	;;
+	stop)
+		if [ -f "${SVC_DIR}/${srv}" ]; then
+			chmod 0755 ${SVC_DIR}/${srv} # Fix permissions if needed
+			${SVC_DIR}/${srv} stop
+			[ $? -eq 0 ] && echo "$1 stopped"
+		fi
+	;;
+	enable)
+		if [ -f "${SVC_DIR}/${srv}" ]; then
+			chmod 0755 ${SVC_DIR}/${srv} # Fix permissions if needed
+			for x in ${SERVICES[@]}; do
+				if [ "${x}" = "${srv}" ]; then
+					echo -e "${YELLOW}${srv} is already enabled${BACK}"
+					exit 1
+				fi
+			done
+			sed -i -e "s/\(^SERVICES=.*\))/\1 ${srv})/g" ${CONF}
+			echo "${srv} is now enabled"
+		else
+			echo -e "${YELLOW}WARNING: ${srv} not found${BACK}"
+		fi
+	;;
+	disable)
+		SERVICES="$(grep "^SERVICES=" ${CONF} | sed -e "s/(${srv})/()/g" -e "s/(${srv} /(/g" -e "s/ ${srv})/)/g" -e "s/ ${srv} / /g")"
+		if [ "${SERVICES}" != "$(grep "^SERVICES=" ${CONF})" ]; then
+			sed -i -e "s/^SERVICES=.*/${SERVICES}/g" ${CONF}
+			echo "${srv} is now disabled"
+		else
+			echo -e "${YELLOW}WARNING: ${srv} wasn't enabled${BACK}"
+		fi
+	;;
+	status)
+		enabled=0
+		for y in ${SERVICES[@]}; do
+			[ "${y}" = "${srv}" ] && { echo -e "${srv} is ${GREEN}enabled${BACK}"; enabled=1; }
+		done
+		if [ ${enabled} -eq 0 ]; then
+			if [ -f "$SVC_DIR/${srv}" ]; then
+				echo -e "${srv} is ${BLUE}disabled${BACK}"
+			else
+				echo -e "${YELLOW}WARNING: ${srv} doesn't exists as a service${BACK}"
+			fi
+		fi
+	;;
+	*)
+		helpo ${0}
+	;;
+esac
+
