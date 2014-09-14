@@ -1,0 +1,311 @@
+#!/usr/bin/env bash
+
+# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
+
+WPA_CONF_FILE=/etc/wpa_supplicant.conf
+
+Error()
+{
+	err=$(cat ${1} | sed -e 's/\n/<br>/g')
+	rm -f ${1}
+
+	export MAIN_DIALOG="<window>
+		<vbox>
+			<vbox border-width=\"30\">
+				<text>
+					<label>${err}</label>
+				</text>
+			</vbox>
+			<hseparator></hseparator>
+			<hbox homogeneous=\"true\">
+				<button ok></button>
+			</hbox>
+		</vbox>
+	</window>"
+	gtkdialog --program=MAIN_DIALOG
+}
+
+list_connection_types()
+{
+	# Fall back
+	echo "<item>DHCP</item>"
+	echo "<item>Static Address</item>"
+	echo "<item>None</item>"
+}
+
+list_passwd_types()
+{
+	# Fall back
+	echo "<item>None</item>"
+	echo "<item>WEP</item>"
+	echo "<item>WPA*</item>"
+}
+
+list_items_essids()
+{
+iw dev $DEV scan | awk '
+/^BSS / {
+    MAC = $2
+	wifi[MAC]["mac"] = toupper(substr($2, 1, 17))
+    wifi[MAC]["enc"] = "Open"
+}
+
+/^[ \t]*SSID: / {
+    $1=""
+    wifi[MAC]["SSID"] = substr($0, 2)
+}
+
+/primary channel|DS Parameter set: channel/ {
+    wifi[MAC]["channel"] = $NF
+}
+
+/^[ \t]*signal: / {
+    wifi[MAC]["sig"] = $2 " " $3
+}
+
+/^[ \t]*\* Authentication suites: PSK/ {
+    wifi[MAC]["enc"] = "WPA2-PSK"
+}
+/^[ \t]*WPA: / {
+    if (wifi[MAC]["enc"] != "WPA2-PSK")
+        wifi[MAC]["enc"] = "WPA"
+}
+/^[ \t]*WEP: / {
+    if (wifi[MAC]["enc"] == "Open")
+        wifi[MAC]["enc"] = "WEP"
+} 
+
+END {
+    for (w in wifi) {
+        printf "<item>%s|%s|%s|%s|%s</item>\n", wifi[w]["SSID"], wifi[w]["mac"], wifi[w]["channel"], wifi[w]["sig"], wifi[w]["enc"]
+    }
+}'
+}
+
+ReplaceKeys()
+{
+	mv $WPA_CONF_FILE ${WPA_CONF_FILE}.bak
+	awk -vssid="$1" -vnewplainkey="$2" -vnewkey="$3" -vout_net=${4} '
+BEGIN {
+	tlines=0
+	nid=0
+	innet=0
+}
+
+/^network=\{/ {
+	nline=0
+	innet=1
+}
+
+/.*/ {
+	lines[tlines]["content"] = $0
+	tlines++
+	if (innet == 1) {
+		lines[tlines]["type"] = nid
+		nline++
+	}
+	else
+		lines[tlines]["type"] = -1
+}
+
+/\}/ {
+	nid++
+	innet=0
+}
+
+function GetID(ssid)
+{
+	ssidstr = "ssid=\"" ssid "\""
+	for (i = 0; i < tlines; i++)
+		if (match(lines[i]["content"], ssidstr))
+			return lines[i]["type"]
+	return -1
+}
+
+function ReplaceKey(ssid, plainkey, key)
+{
+	splainkey = "#psk=\"" plainkey "\""
+	skey = "psk=\"" key "\""
+	nid = GetID(ssid)
+
+	if (nid == -1)
+		return
+	for (i = 0; i < tlines; i++) {
+		if (lines[i]["type"] == nid) {
+			if (match(lines[i]["content"], "#psk=\""))
+				lines[i]["content"] = "\t" splainkey
+			if (match(lines[i]["content"], "psk=[0-9a-zA-Z]"))
+				lines[i]["content"] = "\t" skey
+		}
+	}
+	return nid
+}
+
+END {
+	nid = ReplaceKey(ssid, newplainkey, newkey)
+	for (i = 0; i < tlines; i++)
+			print lines[i]["content"]
+			if (lines[i]["type"] == nid) {
+				print lines[i]["content"] >> out
+			}
+		}
+	}
+}' ${WPA_CONF_FILE}.bak
+}
+
+
+DEV="${1}"
+if [ -z "${DEV}" ]; then
+	echo "Usage ${1} <Wireless device>"
+	exit 1
+fi
+ifconfig ${DEV} up >/dev/null
+
+REFRESH="true"
+while [ "${REFRESH}" == "true" ]; do
+	REFRESH="false"
+	export MAIN_DIALOG="<window title=\"Simple Network Manager\" icon-name=\"/usr/share/icons/Tango/22x22/apps/preferences-system-network-proxy.png\" window_position=\"1\" resizable=\"false\">
+		<vbox>
+			<notebook labels=\"Basic configuration|IP Address|Encryption\">
+				<frame Basic Wireless Settings: Device - ${DEV}>
+					<vbox>
+						<hbox>
+							<table>
+								<width>470</width>
+								<height>200</height>
+								<variable>ESSID</variable>
+								<label>ESSID                             |Hardware address   |Channel|Signal|Encryption?</label>
+								$(list_items_essids)
+							</table>
+						</hbox>
+						<button>
+							<label>Rescan (might take a while)</label>
+							<input file icon=\"reload\"></input>
+							<action>echo REFRESH=true</action>
+							<action>kill \$PPID</action>
+						</button>
+						<hbox>
+							<text>
+								<label>Addressing Type: </label>
+							</text>
+							<combobox case-sensitive=\"true\" value-in-list=\"true\" allow-empty=\"false\">
+							<variable>CONNECTION_TYPE</variable>
+							$(list_connection_types ${DEV})
+							</combobox>
+						</hbox>
+					</vbox>
+				</frame>
+				<frame IP Address Settings: Device - ${DEV}>
+					<vbox>
+						<hbox>
+							<text>
+								<label>IP Address: </label>
+							</text>
+							<entry>
+								<variable>IP</variable>
+							</entry>
+						</hbox>
+						<hbox>
+							<text>
+								<label>Network Mask: </label>
+							</text>
+							<entry>
+								<variable>MASK</variable>
+							</entry>
+						</hbox>
+						<hbox>
+							<text>
+								<label>Broadcast Address: </label>
+							</text>
+							<entry>
+								<variable>BROADCAST</variable>
+							</entry>
+						</hbox>
+					</vbox>
+				</frame>
+				<frame Encryption Settings: Device - ${DEV}>
+					<vbox>
+						<hbox>
+							<text>
+								<label>Encryption Type: </label>
+							</text>
+								<combobox case-sensitive=\"true\" value-in-list=\"true\" allow-empty=\"false\">
+								<variable>ENCRYPTION_TYPE</variable>
+								$(list_passwd_types)
+							</combobox>
+						</hbox>
+						<hbox>
+							<text>
+								<label>Password: </label>
+							</text>
+							<entry invisible_char=\"*\" visibility=\"false\">
+								<variable>ENCRYPTION_PASSWD</variable>
+							</entry>
+						</hbox>
+						<hbox>
+							<checkbox>
+								<label>Replace existing keys in $(basename ${WPA_CONF_FILE}) for this AP with new ones</label>
+								<variable>WPA_SETTINGS</variable>
+      							<action>if true enable:ENTRY</action>
+								<action>if false disable:ENTRY</action>
+							</checkbox>
+						</hbox>
+					</vbox>
+				</frame>
+			</notebook>
+			<hbox>
+				<button cancel>
+				</button>
+				<button ok>
+				</button>
+			</hbox>
+		</vbox>
+	</window>"
+	eval $(gtkdialog --program=MAIN_DIALOG)
+	if [ "${EXIT}" == "Cancel" -o "${EXIT}" == "abort" ]; then
+		exit
+	fi
+	if [ "${EXIT}" == "OK" ]; then
+		REFRESH="false"
+	fi
+done
+
+if [[ ${ENCRYPTION_TYPE} == WPA* ]]; then
+	tmp=$(mktemp); touch ${tmp}.n ${tmp}.e
+	chmod 0600 ${tmp} ${tmp}.n ${tmp}.e
+	wpa_passphrase ${ESSID} ${ENCRYPTION_PASSWD} > ${tmp} 2> ${tmp}.e
+	noenckey=$(awk -F '"' '/#psk="/ {print $2}' ${tmp})
+	enckey=$(awk -F '=' '/psk=/ {print $2}' ${tmp})
+	if [ -n "${noenckey}" -a -n "${enckey}" ]; then
+		if [ -n "$(grep "ssid=\"${ESSID}\"" "${WPA_CONF_FILE}")" ]; then
+			:> ${tmp}
+			ReplaceKeys $ESSID "${noenckey}" "${enckey}" ${tmp} > ${tmp}.n
+			if [  "${WPA_SETTINGS}" = "true" ]; then
+				mv ${tmp}.n ${WPA_CONF_FILE}
+			fi
+		fi
+	else
+		Error -f "${tmp}.e"
+		rm -f "${tmp}"
+		exit 1
+	fi
+	wpa_supplicant -Dnl80211,wext \
+		-i${DEV} \
+		-P/var/run/wpa_supplicant.pid \
+		-c${tmp} >/var/log/wpa_supplicant.log &
+fi
+
+while [ -z $(iw dev ${DEV} link | grep "SSID: ${ESSID}") ]; do
+	sleep 1
+done
+sleep 1
+case "${CONNECTION_TYPE}" in
+	'DHCP')
+		dhcpcd ${DEV} &
+	;;
+	'Static Address')
+		echo "static"
+	;;
+esac
+
+#EOF
