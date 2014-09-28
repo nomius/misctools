@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 
-# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
-
 WPA_CONF_FILE=/etc/wpa_supplicant.conf
 
 Error()
 {
-	err=$(cat ${1} | sed -e 's/\n/<br>/g')
-	rm -f ${1}
+	if [ "${1}" = "-f" ]; then
+		err=$(cat ${2} | sed -e 's/\n/<br>/g')
+		rm -f ${2}
+	else
+		err="${1}"
+	fi
+	echo "Error: [$err]"
 
 	export MAIN_DIALOG="<window>
 		<vbox>
@@ -146,7 +149,7 @@ END {
 	for (i = 0; i < tlines; i++)
 			print lines[i]["content"]
 			if (lines[i]["type"] == nid) {
-				print lines[i]["content"] >> out
+				print lines[i]["content"] >> out_net
 			}
 		}
 	}
@@ -271,34 +274,37 @@ while [ "${REFRESH}" == "true" ]; do
 done
 
 if [[ ${ENCRYPTION_TYPE} == WPA* ]]; then
-	tmp=$(mktemp); touch ${tmp}.n ${tmp}.e
-	chmod 0600 ${tmp} ${tmp}.n ${tmp}.e
-	wpa_passphrase ${ESSID} ${ENCRYPTION_PASSWD} > ${tmp} 2> ${tmp}.e
+	tmp=$(mktemp); touch ${tmp}.e
+	chmod 0600 ${tmp} ${tmp}.e
+	wpa_passphrase "${ESSID}" "${ENCRYPTION_PASSWD}" > ${tmp} 2> ${tmp}.e
 	noenckey=$(awk -F '"' '/#psk="/ {print $2}' ${tmp})
 	enckey=$(awk -F '=' '/psk=/ {print $2}' ${tmp})
-	if [ -n "${noenckey}" -a -n "${enckey}" ]; then
-		if [ -n "$(grep "ssid=\"${ESSID}\"" "${WPA_CONF_FILE}")" ]; then
-			:> ${tmp}
-			ReplaceKeys $ESSID "${noenckey}" "${enckey}" ${tmp} > ${tmp}.n
-			if [  "${WPA_SETTINGS}" = "true" ]; then
-				mv ${tmp}.n ${WPA_CONF_FILE}
-			fi
-		fi
-	else
-		Error -f "${tmp}.e"
-		rm -f "${tmp}"
+	if [ -z "${noenckey}" -o -z "${enckey}" ]; then
+		Error -f ${tmp}.e
+		rm -f ${tmp}.e ${tmp}
 		exit 1
 	fi
+	if [ -n "$(grep "ssid=\"${ESSID}\"" "${WPA_CONF_FILE}" 2>/dev/null)" ]; then
+		:> ${tmp}
+		ReplaceKeys "$ESSID" "${noenckey}" "${enckey}" ${tmp} > ${tmp}.n
+		if [  "${WPA_SETTINGS}" = "true" ]; then
+			mv ${tmp}.n ${WPA_CONF_FILE}
+		else
+			rm -f ${tmp}.n
+		fi
+	fi
+
 	wpa_supplicant -Dnl80211,wext \
 		-i${DEV} \
 		-P/var/run/wpa_supplicant.pid \
 		-c${tmp} >/var/log/wpa_supplicant.log &
 fi
 
-while [ -z $(iw dev ${DEV} link | grep "SSID: ${ESSID}") ]; do
+while [ -z "$(iw dev ${DEV} link | grep "SSID: ${ESSID}")" ]; do
 	sleep 1
 done
 sleep 1
+rm -f ${tmp}
 case "${CONNECTION_TYPE}" in
 	'DHCP')
 		dhcpcd ${DEV} &
