@@ -2,6 +2,12 @@
 
 WPA_CONF_FILE=/etc/wpa_supplicant.conf
 
+DHCPCD=/sbin/dhcpcd
+IW=/usr/sbin/iw
+IP=/sbin/ip
+WPA_SUPPLICANT=/usr/sbin/wpa_supplicant
+WPA_PASSPHRASE=/usr/sbin/wpa_passphrase
+
 Error()
 {
 	if [ "${1}" = "-f" ]; then
@@ -28,6 +34,27 @@ Error()
 	gtkdialog --program=MAIN_DIALOG
 }
 
+mask2cidr() {
+	nbits=0
+	IFS=.
+	for dec in $1 ; do
+		case $dec in
+			255) let nbits+=8;;
+			254) let nbits+=7;;
+			252) let nbits+=6;;
+			248) let nbits+=5;;
+			240) let nbits+=4;;
+			224) let nbits+=3;;
+			192) let nbits+=2;;
+			128) let nbits+=1;;
+			0);;
+			*) echo ""; return;;
+		esac
+	done
+	echo "$nbits"
+}
+
+
 list_connection_types()
 {
 	# Fall back
@@ -46,7 +73,7 @@ list_passwd_types()
 
 list_items_essids()
 {
-iw dev $DEV scan | awk '
+${IW} dev $DEV scan | awk '
 /^BSS / {
     MAC = $2
 	wifi[MAC]["mac"] = toupper(substr($2, 1, 17))
@@ -162,7 +189,7 @@ if [ -z "${DEV}" ]; then
 	echo "Usage ${1} <Wireless device>"
 	exit 1
 fi
-ifconfig ${DEV} up >/dev/null
+${IP} link set dev ${DEV} up >/dev/null
 
 REFRESH="true"
 while [ "${REFRESH}" == "true" ]; do
@@ -205,7 +232,7 @@ while [ "${REFRESH}" == "true" ]; do
 								<label>IP Address: </label>
 							</text>
 							<entry>
-								<variable>IP</variable>
+								<variable>IPADDR</variable>
 							</entry>
 						</hbox>
 						<hbox>
@@ -218,10 +245,18 @@ while [ "${REFRESH}" == "true" ]; do
 						</hbox>
 						<hbox>
 							<text>
-								<label>Broadcast Address: </label>
+								<label>Broadcast Address (can be blank): </label>
 							</text>
 							<entry>
 								<variable>BROADCAST</variable>
+							</entry>
+						</hbox>
+						<hbox>
+							<text>
+								<label>Default route (can be blank): </label>
+							</text>
+							<entry>
+								<variable>ROUTE</variable>
 							</entry>
 						</hbox>
 					</vbox>
@@ -276,7 +311,7 @@ done
 if [[ ${ENCRYPTION_TYPE} == WPA* ]]; then
 	tmp=$(mktemp); touch ${tmp}.e
 	chmod 0600 ${tmp} ${tmp}.e
-	wpa_passphrase "${ESSID}" "${ENCRYPTION_PASSWD}" > ${tmp} 2> ${tmp}.e
+	${WPA_PASSPHRASE} "${ESSID}" "${ENCRYPTION_PASSWD}" > ${tmp} 2> ${tmp}.e
 	noenckey=$(awk -F '"' '/#psk="/ {print $2}' ${tmp})
 	enckey=$(awk -F '=' '/psk=/ {print $2}' ${tmp})
 	if [ -z "${noenckey}" -o -z "${enckey}" ]; then
@@ -294,23 +329,40 @@ if [[ ${ENCRYPTION_TYPE} == WPA* ]]; then
 		fi
 	fi
 
-	wpa_supplicant -Dnl80211,wext \
+	${WPA_SUPPLICANT} -Dnl80211,wext \
 		-i${DEV} \
 		-P/var/run/wpa_supplicant.pid \
 		-c${tmp} >/var/log/wpa_supplicant.log &
-fi
 
-while [ -z "$(iw dev ${DEV} link | grep "SSID: ${ESSID}")" ]; do
-	sleep 1
-done
+	# Wait some time till you have "assigned" a ESSID
+	i=0
+	while [ -z "$(/usr/sbin/iw dev ${DEV} link | grep "SSID: ${ESSID}")" ]; do
+		sleep 1
+		i=$((${i} + 1))
+		if [ ${i} -eq 10 ]; then
+			Error 'No essid assigned :-('
+			exit
+		fi
+	done
+elif [[ ${ENCRIPTION_TYPE} == "WEP" ]]; then
+	${IW} ${DEV} connect ${ESSID} keys 0:${ENCRYPTION_PASSWD}
+else
+	${IW} ${DEV} connect ${ESSID}
+fi
 sleep 1
 rm -f ${tmp}
 case "${CONNECTION_TYPE}" in
 	'DHCP')
-		dhcpcd ${DEV} &
+		${DHCPCD} ${DEV} &
 	;;
 	'Static Address')
-		echo "static"
+		echo "${MASK}" | grep -q '.' && MASK=$(mask2cidr ${MASK})
+		if [ -z "${MASK}" ]; then
+			Error "Wrong network mask"
+			exit 1
+		fi
+		${IP} addr add ${IPADDR}/${MASK} $([ -n "${BROADCAST}" ] && echo broadcast ${BROADCAST}) dev ${DEV}
+		[ -n "${ROUTE}" ] && ${IP} route add default via ${ROUTE}
 	;;
 esac
 
