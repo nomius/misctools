@@ -66,9 +66,9 @@ list_connection_types()
 list_passwd_types()
 {
 	# Fall back
-	echo "<item>None</item>"
-	echo "<item>WEP</item>"
 	echo "<item>WPA*</item>"
+	echo "<item>WEP</item>"
+	echo "<item>None</item>"
 }
 
 list_items_essids()
@@ -214,19 +214,19 @@ while [ "${REFRESH}" == "true" ]; do
 							<action>echo REFRESH=true</action>
 							<action>kill \$PPID</action>
 						</button>
+					</vbox>
+				</frame>
+				<frame Static IP Address Settings: Device - ${DEV}>
+					<vbox>
 						<hbox>
 							<text>
 								<label>Addressing Type: </label>
 							</text>
-							<combobox case-sensitive=\"true\" value-in-list=\"true\" allow-empty=\"false\">
-							<variable>CONNECTION_TYPE</variable>
-							$(list_connection_types ${DEV})
+							<combobox sensitive=\"true\" value-in-list=\"true\" allow-empty=\"false\">
+								<variable>CONNECTION_TYPE</variable>
+								$(list_connection_types ${DEV})
 							</combobox>
 						</hbox>
-					</vbox>
-				</frame>
-				<frame IP Address Settings: Device - ${DEV}>
-					<vbox>
 						<hbox>
 							<text>
 								<label>IP Address: </label>
@@ -273,9 +273,15 @@ while [ "${REFRESH}" == "true" ]; do
 							</combobox>
 						</hbox>
 						<hbox>
-							<text>
-								<label>Password: </label>
-							</text>
+							<checkbox>
+								<label>Use existing WPA encryption key or input a new one below</label>
+								<default>true</default>
+								<variable>EXISTING_WPA_SETTINGS</variable>
+								<action>if true enable:ENTRY</action>
+								<action>if false disable:ENTRY</action>
+							</checkbox>
+						</hbox>
+						<hbox>
 							<entry invisible_char=\"*\" visibility=\"false\">
 								<variable>ENCRYPTION_PASSWD</variable>
 							</entry>
@@ -283,8 +289,8 @@ while [ "${REFRESH}" == "true" ]; do
 						<hbox>
 							<checkbox>
 								<label>Replace existing keys in $(basename ${WPA_CONF_FILE}) for this AP with new ones</label>
-								<variable>WPA_SETTINGS</variable>
-      							<action>if true enable:ENTRY</action>
+								<variable>REPLACE_WPA_SETTINGS</variable>
+								<action>if true enable:ENTRY</action>
 								<action>if false disable:ENTRY</action>
 							</checkbox>
 						</hbox>
@@ -309,24 +315,30 @@ while [ "${REFRESH}" == "true" ]; do
 done
 
 if [[ ${ENCRYPTION_TYPE} == WPA* ]]; then
-	tmp=$(mktemp); touch ${tmp}.e
-	chmod 0600 ${tmp} ${tmp}.e
-	${WPA_PASSPHRASE} "${ESSID}" "${ENCRYPTION_PASSWD}" > ${tmp} 2> ${tmp}.e
-	noenckey=$(awk -F '"' '/#psk="/ {print $2}' ${tmp})
-	enckey=$(awk -F '=' '/psk=/ {print $2}' ${tmp})
-	if [ -z "${noenckey}" -o -z "${enckey}" ]; then
-		Error -f ${tmp}.e
-		rm -f ${tmp}.e ${tmp}
-		exit 1
-	fi
-	if [ -n "$(grep "ssid=\"${ESSID}\"" "${WPA_CONF_FILE}" 2>/dev/null)" ]; then
-		:> ${tmp}
-		ReplaceKeys "$ESSID" "${noenckey}" "${enckey}" ${tmp} > ${tmp}.n
-		if [  "${WPA_SETTINGS}" = "true" ]; then
-			mv ${tmp}.n ${WPA_CONF_FILE}
-		else
-			rm -f ${tmp}.n
+	if [ "${EXISTING_WPA_SETTINGS}" = "false" ]; then
+		tmp=$(mktemp); touch ${tmp}.e
+		chmod 0600 ${tmp} ${tmp}.e
+		${WPA_PASSPHRASE} "${ESSID}" "${ENCRYPTION_PASSWD}" > ${tmp} 2> ${tmp}.e
+		noenckey=$(awk -F '"' '/#psk="/ {print $2}' ${tmp})
+		enckey=$(awk -F '=' '/psk=/ {print $2}' ${tmp})
+		if [ -z "${noenckey}" -o -z "${enckey}" ]; then
+			Error -f ${tmp}.e
+			rm -f ${tmp}.e ${tmp}
+			exit 1
 		fi
+		if [ -n "$(grep "ssid=\"${ESSID}\"" "${WPA_CONF_FILE}" 2>/dev/null)" ]; then
+			:> ${tmp}
+			ReplaceKeys "$ESSID" "${noenckey}" "${enckey}" ${tmp} > ${tmp}.n
+			REMOVE_TMP=1
+			if [  "${REPLACE_WPA_SETTINGS}" = "true" ]; then
+				mv ${tmp}.n ${WPA_CONF_FILE}
+			else
+				rm -f ${tmp}.n
+			fi
+		fi
+	else
+		REMOVE_TMP=0
+		tmp="${WPA_CONF_FILE}"
 	fi
 
 	${WPA_SUPPLICANT} -Dnl80211,wext \
@@ -350,7 +362,9 @@ else
 	${IW} ${DEV} connect ${ESSID}
 fi
 sleep 1
-rm -f ${tmp}
+if [ ${REMOVE_TMP} -eq 1 ]; then
+	rm -f ${tmp}
+fi
 case "${CONNECTION_TYPE}" in
 	'DHCP')
 		${DHCPCD} ${DEV} &
