@@ -8,8 +8,8 @@ CONF=/etc/rc.conf
 . ${CONF}
 
 if [ -t 1 ]; then
-	RED='\e[0;32m'
-	GREEN='\e[0;31m'
+	RED='\e[0;31m'
+	GREEN='\e[0;32m'
 	YELLOW='\e[0;33m'
 	BACK='\e[0m'
 fi
