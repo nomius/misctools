@@ -35,6 +35,7 @@ helpo()
 
 srv="${1}"
 [ -z "${srv}" ] && { helpo; exit; }
+[ "`id -u`" != "0" ] && { echo "You need to run ${0} as root"; exit 1; }
 case ${2} in
 	start)
 		if [ -f "${SVC_DIR}/${srv}" ]; then
@@ -49,6 +50,11 @@ case ${2} in
 			${SVC_DIR}/${srv} stop
 			[ $? -eq 0 ] && echo "$1 stopped"
 		fi
+	;;
+	restart)
+		"${0}" "${1}" stop
+		sleep 1
+		"${0}" "${1}" start
 	;;
 	enable)
 		if [ -f "${SVC_DIR}/${srv}" ]; then
