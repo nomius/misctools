@@ -34,7 +34,7 @@ fi' 18 60
 
 CheckDIRSet()
 {
-	if [ -z "${DIR}" ]; then
+	if [ -z "${SSLDIR}" ]; then
 		 dialog --title "Certificates work" --msgbox "Working directory not set. Aborting..." 5 60
 		 return 1
 	 fi
@@ -54,19 +54,20 @@ SetDays()
 {
 	[ -z "$DAYS" ] && DAYS=$(dialog --stdout --title "Certificates work" --inputbox "Valid days for the certificate?" 10 60 "${DAYS_DEFAULT}")
 	test "$DAYS" -eq "$DAYS" > /dev/null 2>&1 
-	[ $? -ne 0 ] && {dialog --title "Certificates work" --msgbox "Not a valid day number. Setting to ${DAYS_DEFAULT}" 5 60; DAYS=${DAYS_DEFAULT}; }
+	[ $? -ne 0 ] && { dialog --title "Certificates work" --msgbox "Not a valid day number. Setting to ${DAYS_DEFAULT}" 5 60; DAYS=${DAYS_DEFAULT}; }
 }
 
 SetFileDirectory()
 {
-	[ -z "${DIR}" ] && DIR=$(dialog --stdout --title "Certificates work" --inputbox "Directory to work your keys and certificates" 8 60 "${HOME}/.ssh")
-	PRIV=${DIR}/id_rsa
-	PUB=${DIR}/id_rsa.pub
-	CRT=${DIR}/id_rsa.crt
-	CSR=${DIR}/id_rsa.csr
-	CRT_DER=${DIR}/id_rsa_der.crt
-	CRT_DHP=${DIR}/id_rsa.dhp
-	PEM_SRV=${DIR}/id_rsa.PEM
+	[ -z "${SSLDIR}" ] && SSLDIR=$(dialog --stdout --title "Certificates work" --inputbox "Directory to work your keys and certificates" 8 60 "${HOME}/.ssh")
+	PRIV=${SSLDIR}/id_rsa
+	PUBSSH=${SSLDIR}/id_rsa.pub
+	PUB=${SSLDIR}/id_rsa_pub.pem
+	CRT=${SSLDIR}/id_rsa.crt
+	CSR=${SSLDIR}/id_rsa.csr
+	CRT_DER=${SSLDIR}/id_rsa_der.crt
+	CRT_DHP=${SSLDIR}/id_rsa.dhp
+	PEM_SRV=${SSLDIR}/id_rsa.PEM
 	mkdir -p $(dirname "${PRIV}")
 	err $? "mkdir -p $(dirname ${PRIV})" && return
 }
@@ -111,19 +112,30 @@ CreateKeys()
 		if dialog --title "Certificates work" --yesno "There's already a private key in the same directory, do you want to remove it and create a new one?" 7 60; then
 			rm -f ${PRIV}
 		else
-			ssh-keygen -f ${PRIV} -y > ${PUB}
-			err $? "ssh-keygen -f ${PRIV} -y > ${PUB}"
+			openssl rsa -in ${PRIV} -pubout > ${PUB}
+			err $? "openssl rsa -in ${PRIV} -pubout > ${PUB}" && return
+
+			ssh-keygen -f ${PRIV} -y > ${PUBSSH}
+			err $? "ssh-keygen -f ${PRIV} -y > ${PUBSSH}"
+
 			return
 		fi
 	fi
 	dialog --title "Certificates work" --infobox "Creating RSA private key in PEM format: $(basename ${PRIV})" 3 60
-	openssl genrsa -out ${PRIV} 4096
-	err $? "openssl genrsa -out ${PRIV} 4096" && return
+	openssl genpkey -algorithm RSA -out ${PRIV} -pkeyopt rsa_keygen_bits:4096
+
+	err $? "openssl genpkey -algorithm RSA -out ${PRIV} -pkeyopt rsa_keygen_bits:4096" && return
 	chmod 0600 ${PRIV} && chmod 0700 $(dirname ${PRIV})
+
 	dialog --title "Certificates work" --infobox "Creating RSA public key from private key: $(basename ${PUB})" 3 60
-	ssh-keygen -f ${PRIV} -y > ${PUB}
-	err $? "ssh-keygen -f ${PRIV} -y > ${PUB}" && return
-	dialog --title "Certificates work" --msgbox "Key pair created ($(basename ${PRIV}),$(basename ${PUB}))" 5 60
+	openssl rsa -in ${PRIV} -pubout > ${PUB}
+	err $? "openssl rsa -in ${PRIV} -pubout > ${PUB}" && return
+
+	dialog --title "Certificates work" --infobox "Creating ssh RSA public key from private key: $(basename ${PUBSSH})" 3 60
+	ssh-keygen -f ${PRIV} -y > ${PUBSSH}
+	err $? "ssh-keygen -f ${PRIV} -y > ${PUBSSH}" && return
+
+	dialog --title "Certificates work" --msgbox "Key pair created ($(basename ${PRIV}),$(basename ${PUB})).\nAlso created ssh RSA public key $(basename ${PUBSSH})" 6 60
 }
 
 CreateSelfSignedCert()
@@ -266,8 +278,16 @@ GetFilesInfo()
 		AuthorityKeyIndentifier=$(openssl x509 -in ${CRT} -text | awk -F: '/^[ ]*X509v3 Authority Key Identifier:/ {getline; print $0}' | sed -e 's/^[ ]*keyid://g')
 		selfsign=0;	[ "${SubjectKeyIndentifier}" = "${AuthorityKeyIndentifier}" ] && selfsign=1
 	fi
-	dialog --title "Certificates work" --msgbox "Currently you have the following files in ${DIR}:
-		$([ -e ${PRIV} ] && echo "\n '-> Private key: $(b ${PRIV})\n")$([ -e ${PUB} ] && echo " '-> Public key: $(b ${PUB})\n")$([ -e ${CSR} ] && echo " '-> Certificate signing request: $(b ${CSR})\n")$([ -e ${CRT} ] && echo " '-> Certificate $([ $selfsign -eq 1 ] && echo "(Self signed)"): $(b ${PUB})\n")$([ -e ${CRT_DER} ] && echo " '-> Certificate exported in DER (web browsers): $(b ${CRT_DER})\n")$([ -e ${CRT_DHP} ] && echo " '-> Diffie-Hoffman Parameters: $(b ${CRT_DHP})\n")$([ -e ${PEM_SRV} ] && echo " '-> PEM file for servers: $(b ${PEM_SRV})")" 12 76
+	dialog --title "Certificates work" --msgbox "Currently you have the following files in ${SSLDIR}:
+$([ -e ${PRIV} ] &&    echo "\n  '-> Private key in PEM format: $(b ${PRIV})\n")
+$([ -e ${PUB} ] &&     echo "  '-> Public key in PEM format: $(b ${PUB})\n")
+$([ -e ${PUBSSH} ] &&  echo "  '-> Public key for SSH: $(b ${PUBSSH})\n")
+$([ -e ${CSR} ] &&     echo "  '-> Certificate signing request: $(b ${CSR})\n")
+$([ -e ${CRT} ] &&     echo " '-> Certificate $([ $selfsign -eq 1 ] && echo "(Self signed)"): $(b ${CRT})\n")
+$([ -e ${CRT_DER} ] && echo "  '-> Certificate exported in DER (web browsers): $(b ${CRT_DER})\n")
+$([ -e ${CRT_DHP} ] && echo "  '-> Diffie-Hoffman Parameters: $(b ${CRT_DHP})\n")
+$([ -e ${PEM_SRV} ] && echo "  '-> PEM file for servers: $(b ${PEM_SRV})")" \
+	12 76
 }
 
 if [ -n "${1}" ]; then
@@ -283,13 +303,23 @@ if [ -n "${1}" ]; then
 			[ -z "${2}" ] && { echo "No file given to decrypt"; exit; }
 			openssl smime -decrypt -in ${2} -binary -inform DEM -inkey ${PRIV} -out $(basename ${2} .enc)
 		;;
+		'sign')
+			[ ! -f ${PRIV} ] && $0
+			[ -z "${2}" ] && { echo "No file given to sign"; exit; }
+			openssl dgst -sha256 -sign ${PRIV} -out "${2}.sha256" "${2}" 
+		;;
+		'verify')
+			[ ! -f ${PUB} ] && ${0}
+			[ -z "${2}" ] && { echo "No signature file given to verify"; exit; }
+			openssl dgst -sha256 -verify ${PUB} -signature "${2}" $(basename ${2} .${2/*./})
+		;;
 	esac
 	exit
 fi
 
 while true; do
 	OPT=$(dialog --stdout --cancel-label "Exit" --title "Certificates work" --menu "This menu will help you in all the work needed to maintain certificates and keys up to date" 17 61 9 \
-			1 "Select working directory (${DIR})" \
+			1 "Select working directory (${SSLDIR})" \
 			2 "Create keys" \
 			3 "Create a self signed certificate from keys (CRT)" \
 			4 "Create a Certificate Signing Request from keys (CSR)" \
