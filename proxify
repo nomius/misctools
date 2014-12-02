@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+
+START_LPORT=4000
+END_LPORT=9999
+
+[ -z "${TPORT}" ] && TPORT=9050
+
+get_free_port()
+{
+	used=$(nmap localhost -p${1}-${2} | grep " open " | awk -F / '{print $1}')
+	for i in $(seq $1 $2); do
+		i_in_j=0
+		for j in $used; do
+			if [ ${i} = ${j} ]; then
+				i_in_j=1
+				break
+			fi
+		done
+		if [ ${i_in_j} -eq 0 ]; then
+			echo ${i}
+			return
+		fi
+	done
+	return
+}
+
+[ -z "${LPORT}" ] && LPORT=$(get_free_port ${START_LPORT} ${END_LPORT})
+
+
+if [ ${#} -ne 2 ]; then
+	echo "${0} <ADDRESS> <PORT>"
+	exit 1
+fi
+ADDRESS="${1}"
+RPORT="${2}"
+
+echo "Connection established in localhost:${LPORT} for (${ADDRESS}:${RPORT})"
+socat TCP4-LISTEN:${LPORT},fork SOCKS4A:localhost:${ADDRESS}:${RPORT},socksport=${TPORT}
+
