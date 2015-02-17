@@ -1,26 +1,34 @@
 #!/usr/bin/env bash
 
-DEFAULTS[0]="txt|leafpad"
-DEFAULTS[1]="pdf|mupdf"
-DEFAULTS[2]="png,jpg,jpeg|gpicview"
-#DEFAULTS[3]="mp3|audacious"
-DEFAULTS[3]="mp4,avi,wmv,mkv,flv|gnome-mplayer"
-DEFAULTS[4]="c,h,cpp,md|urxvt -tn xterm -e vim"
-DEFAULTS[5]="tar,tar.gz,tar.xz,tar.bz2,tgz,txz,tbz2,tz2|urxvt -tn xterm -e mc"
+# kxdg.cfg format:
+# extension1[,extension2,...extensionN]|command
 
 APPLICATIONS_DIR=/usr/share/applications
+USER_CONF=$HOME/.config/kxdg.cfg
+GLOBAL_CONF=/usr/shate/kxdg.cfg
 
 
-if [ -e $HOME/.config/kxdg.cfg ]; then
-	. $HOME/.config/kxdg.cfg
-fi
+ReadConf()
+{
+	# Kwort's xdg implementation load first user's conf, then global
+	i=0
+	for cfg in $USER_CONF $GLOBAL_CONF; do
+		if [ -e "$cfg" ]; then
+			while read line; do
+				DEFAULTS[$i]=$line
+				i=$(($i + 1))
+			done < $cfg
+		fi
+	done
 
-cachedir=${XDG_CACHE_HOME:-"$HOME/.cache"}
-if [ -d "$cachedir" ]; then
-	cache=$cachedir/dmenu_run
-else
-	cache=$HOME/.dmenu_cache # if no xdg dir, fall back to dotfile in ~
-fi
+	# Dmenu
+	cachedir=${XDG_CACHE_HOME:-"$HOME/.cache"}
+	if [ -d "$cachedir" ]; then
+		cache=$cachedir/dmenu_run
+	else
+		cache=$HOME/.dmenu_cache # if no xdg dir, fall back to dotfile in ~
+	fi
+}
 
 
 GetApplicationFiles()
@@ -31,13 +39,14 @@ GetApplicationFiles()
 	return $(echo -n "$ffs" | wc -w)
 }
 
+
 GetApplicationDefaults()
 {
 	ext="${1}"
 	OLDIFS="$IFS"
 	for x in "${DEFAULTS[@]}"; do
-		cmd=$(echo "$x" | awk -F '|' '{printf $2}')
-		exts=$(echo "$x" | awk -F '|' '{printf $1}')
+		cmd=$(echo "$x" | awk -F '|' '{print $2}')
+		exts=$(echo "$x" | awk -F '|' '{print $1}')
 		aExt=()
 		IFS=","
 		aExt=($exts)
@@ -49,24 +58,28 @@ GetApplicationDefaults()
 			fi
 		done
 	done
+	exit
 	return 1
 }
+
 
 WriteDefaults()
 {
 	i=0
 	:> $HOME/.config/kxdg.cfg
 	for x in "${DEFAULTS[@]}"; do
-		echo "DEFAULTS[$i]=\"${DEFAULTS[$i]}\"" >> $HOME/.config/kxdg.cfg
+		echo "${DEFAULTS[$i]}" >> $HOME/.config/kxdg.cfg
 		i=$(($i + 1))
 	done
 }
+
 
 AddCmd()
 {
 	i=${#DEFAULTS[@]}
 	DEFAULTS[$i]="$1|$2"
 }
+
 
 GetCmd()
 {
@@ -80,19 +93,21 @@ GetCmd()
 	echo "$cmd"
 }
 
+
 GetApplicationFile()
 {
 	application=$(echo -e "$1" | dmenu -p "Choose from the existing application or type a new command to open this file types")
-	echo -e "$1" | while read line; do
+	while read line; do
 		if [ "$line" = "$application" ]; then
 			f=$(grep "^Name=$application$" ${APPLICATIONS_DIR}/* | awk -F ':' '{print $1}')
 			echo $f
 			return 0
 		fi
-	done
+	done < <(echo -e "$1")
 	echo "$application"
 	return 1
 }
+
 
 RunCMD()
 {
@@ -109,6 +124,7 @@ RunCMD()
 	fi
 }
 
+
 INIhParser()
 {
 	awk -v ssection="Desktop Entry" -v key="$2" '{
@@ -124,14 +140,14 @@ INIhParser()
 }
 
 
-
-extension="${1/*./}"
+ReadConf
+extension="$(echo "${1/*./}" | tr '[:upper:]' '[:lower:]')"
 aFiles=$(GetApplicationFiles $extension)
 iFiles=$?
 cmd=$(GetApplicationDefaults $extension)
 if [ -z "$cmd" ]; then
 	if [ $iFiles -eq 1 ]; then
-		cmd=$(grep "Exec=.*%.*" "${aFiles}")
+		cmd=$(INIhParser $aFiles "Exec")
 	elif [ $iFiles -eq 0 ]; then
 		cmd=$(GetCmd)
 	else
