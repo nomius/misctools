@@ -3,10 +3,10 @@
 DEFAULTS[0]="txt|leafpad"
 DEFAULTS[1]="pdf|mupdf"
 DEFAULTS[2]="png,jpg,jpeg|gpicview"
-DEFAULTS[3]="mp3|audacious"
-DEFAULTS[4]="mp4,avi,wmv,mkv,flv|gnome-mplayer"
-DEFAULTS[5]="c,h,cpp,md|urxvt -tn xterm -e vim"
-#DEFAULTS[6]="tar,tar.gz,tar.xz,tar.bz2,tgz,txz,tbz2,tz2|urxvt -tn xterm -e mc"
+#DEFAULTS[3]="mp3|audacious"
+DEFAULTS[3]="mp4,avi,wmv,mkv,flv|gnome-mplayer"
+DEFAULTS[4]="c,h,cpp,md|urxvt -tn xterm -e vim"
+DEFAULTS[5]="tar,tar.gz,tar.xz,tar.bz2,tgz,txz,tbz2,tz2|urxvt -tn xterm -e mc"
 
 APPLICATIONS_DIR=/usr/share/applications
 
@@ -28,7 +28,7 @@ GetApplicationFiles()
 	ext="${1}"
 	ffs=$(grep "MimeType=.*${ext}.*" ${APPLICATIONS_DIR}/* | awk -F ':' '{print $1}')
 	echo $ffs
-	return $(echo -n "$ffs" | wc -l)
+	return $(echo -n "$ffs" | wc -w)
 }
 
 GetApplicationDefaults()
@@ -82,23 +82,48 @@ GetCmd()
 
 GetApplicationFile()
 {
-	cafile=$(dmenu_run -p "Choose from the existing application or type a new command for $1 files")
-	echo "$cafile"
+	application=$(echo -e "$1" | dmenu -p "Choose from the existing application or type a new command to open this file types")
+	echo -e "$1" | while read line; do
+		if [ "$line" = "$application" ]; then
+			f=$(grep "^Name=$application$" ${APPLICATIONS_DIR}/* | awk -F ':' '{print $1}')
+			echo $f
+			return 0
+		fi
+	done
+	echo "$application"
+	return 1
 }
 
 RunCMD()
 {
-	full=$(readlink -f "$2")
+	full="$(readlink -f "$2")"
 	if [ -n "$(echo "$1" | grep "%[fF]")" ]; then
-		cmd=$(echo "$1" | sed -e "s|%[fF]|$full|g")
-		${cmd} &
+		cmd=$(echo "$1" | sed -e "s|%[fF]|\"$full\"|g")
+		sh -c "${cmd}" &
 	elif [ -n "$(echo "$1" | grep "%[uU]")" ]; then
-		cmd=$(echo "$1" | sed -e "s|%[U]|file://$full|g")
-		${cmd} &
+		full="$(echo $full | sed -e 's/ /%20/g')"
+		cmd=$(echo "$1" | sed -e "s|%[uU]|\"file://$full\"|g")
+		sh -c "${cmd}" &
 	else
 		${1} "${2}" &
 	fi
 }
+
+INIhParser()
+{
+	awk -v ssection="Desktop Entry" -v key="$2" '{
+		if ($0 ~ /^\[.*/)
+			section=$0
+		else if ($0 !~ /^$/)
+			if (section == "[" ssection "]") {
+				split($0, kv, "=")
+				if (kv[1] == key)
+					print kv[2]
+			}
+	}' "${1}"
+}
+
+
 
 extension="${1/*./}"
 aFiles=$(GetApplicationFiles $extension)
@@ -111,17 +136,21 @@ if [ -z "$cmd" ]; then
 		cmd=$(GetCmd)
 	else
 		for x in ${aFiles[@]}; do
-			name=$(grep "^Name=.*" "${x}" | awk -F '=' '{print $2}')
-			names="$names $name"
+			name="$(INIhParser $x "Name")"
+			[ -z "$names" ] && names=$name || names="${names}\n$name"
 		done
-		afile=$(GetApplicationFile)
-		cmd=$(grep "Exec=.*%.*" "${afile}")
+		afile=$(GetApplicationFile "${names}")
+		if [ $? -eq 0 ]; then
+			cmd=$(INIhParser $afile "Exec")
+		else
+			cmd=$afile
+		fi
 	fi
 	if [ -n "$cmd" ]; then
 		AddCmd "${extension}" "${cmd}"
 		WriteDefaults
 	fi
 fi
-RunCMD ${cmd} "${1}"
+RunCMD "${cmd}" "${1}"
 exit 0
 
