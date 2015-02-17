@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
+# By David B. Cortarello (Nomius) <dcortarello@gmail.com>
 
 SVC_DIR=/etc/rc.d
 CONF=/etc/rc.conf

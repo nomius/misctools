@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
+# By David B. Cortarello (Nomius) <dcortarello@gmail.com>
 
 START_LPORT=4000
 END_LPORT=9999

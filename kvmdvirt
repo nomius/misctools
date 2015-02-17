@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
+# By David B. Cortarello (Nomius) <dcortarello@gmail.com>
 
 INFO=info
 DEFAULT_DISK=disk.img
