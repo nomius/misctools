@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# By David B. Cortarello (Nomius) <dcortarello@gmail@com>
+
+
 # kxdg.cfg format:
 # extension1[,extension2,...extensionN]|command
 
