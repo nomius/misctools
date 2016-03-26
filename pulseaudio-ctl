@@ -1,0 +1,164 @@
+#!/usr/bin/env bash 
+
+MakeItRun() {
+	if [ -n "${1}" ]; then
+		user=$(ps -p $(pgrep ${2}) uh | cut -d ' ' -f 1)
+		su -c "pulseaudio --check" $user
+		[ $? -eq 1 ] && su -c "pulseaudio --start --log-target=syslog &" $user
+	fi
+}
+
+GetCurrentSink() {
+	INDEX=$(pacmd list-sinks | grep "* index" | awk -F ' ' '{print $NF}')
+	echo $INDEX
+}
+
+GetCurrentSource() {
+	INDEX=$(pacmd list-sources | grep "* index" | awk -F ' ' '{print $NF}')
+	echo $INDEX
+}
+
+Switch() {
+	case $1 in
+		input)
+			shift 2
+			SRCS=$(pacmd list-sources | grep -e "name: <.*$1.*>" -B 1 | grep index | awk '{print $NF}')
+			pacmd set-default-source $SRCS
+			pacmd list-source-outputs | grep index | while read line; do
+				echo "Moving output: $(echo $line | cut -f2 -d' ') to source: $SRCS ($1)"
+				pacmd move-source-output `echo $line | cut -f2 -d' '` $SINK
+			done
+		;;
+		output)
+			shift 2
+			SINK=$(pacmd list-sinks | grep -e "name: <.*$1.*>" -B 1 | grep index | awk '{print $NF}')
+			pacmd set-default-sink $SINK
+			pacmd list-sink-inputs | grep index | while read line; do
+				echo "Moving input: $(echo $line | cut -f2 -d' ') to sink: $SINK ($1)"
+				pacmd move-sink-input `echo $line | cut -f2 -d' '` $SINK
+			done
+		;;
+		all)
+			shift 2
+			Switch input to $1
+			Switch output to $1
+		;;
+	esac
+}
+
+Mute() {
+	if [ "${1}" == "mic" ]; then
+		indx=$(GetCurrentSource)
+		if [ "${2}" == "toggle" ]; then
+			cur=$(pacmd list-sources | grep -A 15 '* index' | awk '/muted:/ { print $2 }')
+			if [ "${cur}" == "no" ]; then
+				pacmd set-source-mute $indx true
+			else
+				pacmd set-source-mute $indx false
+			fi
+		else
+			pacmd set-source-mute $indx true
+		fi
+	else
+		indx=$(GetCurrentSink)
+		if [ "${1}" == "toggle" ]; then
+			cur=$(pacmd list-sinks | grep -A 15 '* index' | awk '/muted:/ { print $2 }')
+			if [ "${cur}" == "no" ]; then
+				pacmd set-sink-mute $indx true
+			else
+				pacmd set-sink-mute $indx false
+			fi
+		else
+			pacmd set-sink-mute $indx true
+		fi
+	fi
+}
+
+UnMute() {
+	if [ "${1}" == "mic" ]; then
+		indx=$(GetCurrentSource)
+		pacmd set-source-mute $indx false
+	else
+		indx=$(GetCurrentSink)
+		pacmd set-sink-mute $indx false
+	fi
+}
+
+Volume() {
+	set -x
+	if [ "${1}" == "set" ]; then
+		if [ "${2}" == "mic" ]; then
+			UnMute mic
+			indx=$(GetCurrentSource)
+			pactl set-source-volume $indx ${3}%
+		else
+			UnMute
+			indx=$(GetCurrentSink)
+			pactl set-sink-volume $indx ${2}%
+		fi
+	fi
+	if [ "${1}" == "up" ]; then
+		if [ "${2}" == "mic" ]; then
+			UnMute mic
+			indx=$(GetCurrentSource)
+			pactl set-source-volume $indx +${3}%
+		else
+			UnMute
+			indx=$(GetCurrentSink)
+			pactl set-sink-volume $indx +${2}%
+		fi
+	fi
+	if [ "${1}" == "down" ]; then
+		if [ "${2}" == "mic" ]; then
+			UnMute mic
+			indx=$(GetCurrentSource)
+			pactl set-source-volume $indx -- \-${3}%
+		else
+			UnMute
+			indx=$(GetCurrentSink)
+			pactl set-sink-volume $indx \-${2}%
+		fi
+	fi
+	set +x
+}
+
+SayHelp() {
+	cat << EOF
+$0 [options]
+swtich to <name regex>
+volume [set|up|down] [mic] <percentage>
+mute [mic] [toggle]
+unpute [mic]
+EOF
+}
+
+user=$(ps -p $(pidof pulseaudio) uh | cut -d ' ' -f 1)
+[ -z "$user" ] && MakeItRun as startx
+user=$(ps -p $(pidof pulseaudio) uh | cut -d ' ' -f 1)
+if [ "$(whoami)" != "$user" ]; then
+	su -c "${0} $*" $user
+fi
+
+case $1 in
+	switch)
+		shift 1
+		Switch $@
+	;;
+	volume)
+		shift 1
+		Volume $@
+	;;
+	mute)
+		shift 1
+		Mute $@
+	;;
+	unmute)
+		shift 1
+		Mute $@
+	;;
+	*)
+		SayHelp
+		exit 1
+	;;
+esac
+
