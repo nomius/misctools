@@ -1,10 +1,20 @@
 #!/usr/bin/env bash 
 
+ALSA_CHANNEL=Master
+
 MakeItRun() {
 	if [ -n "${1}" ]; then
 		user=$(ps -p $(pgrep ${2}) uh | cut -d ' ' -f 1)
-		su -c "pulseaudio --check" $user
-		[ $? -eq 1 ] && su -c "pulseaudio --start --log-target=syslog &" $user
+		if [ "$(whoami)" != "$user" ]; then
+			su -c "pulseaudio --check" $user
+			ret=$?
+		else
+			pulseaudio --check
+			ret=$?
+		fi
+		if [ $ret -ne 0 ]; then
+			[ "$(whoami)" != "$user" ] && su -c "pulseaudio --start --log-target=syslog &" $user || pulseaudio --start --log-target=syslog &
+		fi
 	fi
 }
 
@@ -47,6 +57,7 @@ Switch() {
 }
 
 Mute() {
+	set -x
 	if [ "${1}" == "mic" ]; then
 		indx=$(GetCurrentSource)
 		if [ "${2}" == "toggle" ]; then
@@ -68,10 +79,21 @@ Mute() {
 			else
 				pacmd set-sink-mute $indx false
 			fi
+			for((i=0;i<3;i++)); do
+				NAME=$(pacmd list-sinks 2>/dev/null | grep -A 30 "^[ ]*\*" | awk -F '"' '/alsa.name/ {print $2}')
+				[ -n "${NAME}" ] && break
+				sleep 1
+			done
+			[ -z "${NAME}" ] && return
+			logger $NAME
+			DEV=$(aplay -l | grep "$NAME" | awk -F '[ :]' '{print $2}')
+			logger $DEV
+			amixer -c ${DEV} set ${ALSA_CHANNEL} toggle
 		else
 			pacmd set-sink-mute $indx true
 		fi
 	fi
+set +x
 }
 
 UnMute() {
@@ -85,7 +107,6 @@ UnMute() {
 }
 
 Volume() {
-	set -x
 	if [ "${1}" == "set" ]; then
 		if [ "${2}" == "mic" ]; then
 			UnMute mic
@@ -119,7 +140,6 @@ Volume() {
 			pactl set-sink-volume $indx \-${2}%
 		fi
 	fi
-	set +x
 }
 
 SayHelp() {
@@ -132,11 +152,12 @@ unpute [mic]
 EOF
 }
 
-user=$(ps -p $(pidof pulseaudio) uh | cut -d ' ' -f 1)
+user=$(ps -p $(pidof pulseaudio) uh 2>/dev/null | cut -d ' ' -f 1)
 [ -z "$user" ] && MakeItRun as startx
 user=$(ps -p $(pidof pulseaudio) uh | cut -d ' ' -f 1)
 if [ "$(whoami)" != "$user" ]; then
 	su -c "${0} $*" $user
+	exit
 fi
 
 case $1 in
